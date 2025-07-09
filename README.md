@@ -300,21 +300,6 @@ Invalid API key
 
 이 프로젝트는 MIT 라이센스 하에 배포됩니다. 자세한 내용은 `LICENSE` 파일을 참조하세요.
 
-## 👥 팀 정보
-
-**KDT 부트캠프 프로젝트**
-- **개발자**: [Your Name]
-- **프로젝트 기간**: 2025.07
-- **멘토**: [Mentor Name]
-
-## 📞 문의사항
-
-프로젝트 관련 문의사항이 있으시면 다음으로 연락해주세요:
-- **Email**: [your-email@example.com]
-- **GitHub Issues**: [GitHub Repository URL]/issues
-
----
-
 > 💡 **팁**: 이 README는 지속적으로 업데이트됩니다. 최신 정보는 항상 이 문서를 확인해주세요.
 
 **⭐ 이 프로젝트가 도움이 되셨다면 Star를 눌러주세요!** 
