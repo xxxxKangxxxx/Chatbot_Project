@@ -17,7 +17,7 @@ from app.schemas.user import (
 )
 from app.crud.user import (
     create_user, get_user_by_id, update_user,
-    delete_user, search_users, get_users, get_users_list
+    delete_user, search_users, get_users, get_users_list, get_user_by_name, get_all_users
 )
 from app.crud.chat_log import get_user_chat_history
 from app.crud.emotion import get_user_recent_emotions
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-@router.post("/", response_model=UserResponse)
-async def create_new_user(
+@router.post("/register", response_model=UserResponse)
+async def register_user(
     user_data: UserCreate,
     db: AsyncSession = Depends(get_db)
 ):
@@ -36,10 +36,16 @@ async def create_new_user(
     새로운 사용자 등록
     """
     try:
+        # 중복 이름 확인 (선택사항)
+        existing_user = await get_user_by_name(db, user_data.name)
+        if existing_user:
+            # 중복되면 숫자 추가
+            user_data.name = f"{user_data.name}_{len(await get_all_users(db)) + 1}"
+        
         # 사용자 생성
         new_user = await create_user(db, user_data)
         
-        logger.info(f"새 사용자 등록 완료 - ID: {new_user.id}, 이름: {new_user.name}")
+        logger.info(f"새 사용자 등록 완료: {new_user.name} (ID: {new_user.id})")
         
         return UserResponse(
             id=new_user.id,
@@ -52,7 +58,9 @@ async def create_new_user(
             is_active=new_user.is_active,
             last_login=new_user.last_login,
             created_at=new_user.created_at,
-            updated_at=new_user.updated_at
+            updated_at=new_user.updated_at,
+            display_name=new_user.display_name,
+            age_group=new_user.age_group
         )
         
     except Exception as e:

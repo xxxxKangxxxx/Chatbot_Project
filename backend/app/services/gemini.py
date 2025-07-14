@@ -40,18 +40,14 @@ class GeminiService:
         context: ChatPromptContext,
         conversation_history: List[Dict[str, Any]] = None
     ) -> ChatResponse:
-        """
-        사용자 메시지에 대한 Gemini 응답 생성
-        
-        Args:
-            user_message: 사용자 메시지
-            user_info: 사용자 정보
-            context: 대화 컨텍스트
-            conversation_history: 최근 대화 기록
-            
-        Returns:
-            ChatResponse: Gemini 응답
-        """
+        # context가 Pydantic 모델이면 dict로 변환
+        if hasattr(context, "dict"):
+            context = context.dict()
+        # 내부 리스트도 dict로 변환
+        if 'similar_conversations' in context:
+            context['similar_conversations'] = [c.dict() if hasattr(c, 'dict') else c for c in context['similar_conversations']]
+        if 'conversation_history' in context:
+            context['conversation_history'] = [c.dict() if hasattr(c, 'dict') else c for c in context['conversation_history']]
         try:
             # 시스템 프롬프트 구성
             system_prompt = self._build_system_prompt(user_info, context)
@@ -86,7 +82,7 @@ class GeminiService:
                 response=processed_response,
                 created_at=datetime.now(),
                 model_used="gemini-2.0-flash-exp",
-                context_used=[conv.get('message', '') for conv in context.similar_conversations],
+                context_used=[conv.get('message', '') for conv in context.get('similar_conversations', [])],
                 similar_conversations=[],
                 suggested_actions=[],
                 emotion=None,
@@ -155,21 +151,21 @@ class GeminiService:
 5. 사용자의 관심사와 취미를 적극적으로 활용하세요"""
         
         # 관심사 정보 추가
-        if context.user_interests:
-            interests_text = ", ".join(context.user_interests)
+        if context.get('user_interests'):
+            interests_text = ", ".join(context['user_interests'])
             base_prompt += f"\n\n사용자의 관심사: {interests_text}"
             base_prompt += "\n대화 중에 이런 관심사들을 자연스럽게 언급해보세요."
         
         # 최근 감정 상태 반영
-        if context.recent_emotions:
-            emotions_text = ", ".join(context.recent_emotions)
+        if context.get('recent_emotions'):
+            emotions_text = ", ".join(context['recent_emotions'])
             base_prompt += f"\n\n최근 감정 상태: {emotions_text}"
             base_prompt += "\n사용자의 감정 상태를 고려하여 적절한 위로나 격려를 해주세요."
         
         # 유사한 과거 대화 컨텍스트 활용
-        if context.similar_conversations:
+        if context.get('similar_conversations'):
             base_prompt += "\n\n과거 비슷한 대화 내용:"
-            for i, conv in enumerate(context.similar_conversations[:3]):  # 최대 3개만
+            for i, conv in enumerate(context['similar_conversations'][:3]):  # 최대 3개만
                 base_prompt += f"\n{i+1}. {conv.get('content', '')[:100]}..."
             base_prompt += "\n이전 대화 내용을 참고하여 연속성 있는 대화를 이어가세요."
         

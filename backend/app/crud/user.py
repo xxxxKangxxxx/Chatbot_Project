@@ -473,12 +473,32 @@ async def get_user_statistics(db: AsyncSession) -> Dict[str, Any]:
     }
 
 
-async def check_user_exists(db: AsyncSession, user_id: int) -> bool:
+async def get_user_by_name(db: AsyncSession, name: str) -> Optional[User]:
+    """이름으로 사용자 조회"""
+    try:
+        result = await db.execute(select(User).where(User.name == name))
+        return result.scalar_one_or_none()
+    except Exception as e:
+        logger.error(f"사용자 이름 조회 실패: {str(e)}")
+        return None
+
+async def get_all_users(db: AsyncSession) -> List[User]:
+    """모든 사용자 조회"""
+    try:
+        result = await db.execute(select(User))
+        return result.scalars().all()
+    except Exception as e:
+        logger.error(f"전체 사용자 조회 실패: {str(e)}")
+        return []
+
+async def check_user_exists(db: AsyncSession, user_id: str) -> bool:
     """사용자 존재 여부 확인"""
-    result = await db.execute(
-        select(func.count(User.id)).where(User.id == user_id)
-    )
-    return result.scalar() > 0
+    try:
+        result = await db.execute(select(User).where(User.id == user_id))
+        return result.scalar_one_or_none() is not None
+    except Exception as e:
+        logger.error(f"사용자 존재 확인 실패: {str(e)}")
+        return False
 
 
 async def get_user_profile_summary(db: AsyncSession, user_id: int) -> Optional[Dict[str, Any]]:

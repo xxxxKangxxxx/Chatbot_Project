@@ -62,7 +62,7 @@ class ChatResponse(BaseModel):
 
 class ChatLogSchema(BaseModel):
     """채팅 로그 스키마"""
-    id: Optional[int] = None
+    id: Optional[str] = None  # int → str로 변경!
     user_id: str = Field(..., description="사용자 ID (UUID)")
     role: RoleEnum = Field(..., description="발화 주체")
     message: str = Field(..., description="메시지 내용")

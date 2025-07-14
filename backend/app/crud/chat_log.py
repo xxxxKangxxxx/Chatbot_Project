@@ -594,4 +594,4 @@ async def get_active_chat_session(
             )
         ).order_by(desc(ChatSession.start_time))
     )
-    return result.scalar_one_or_none() 
+    return result.scalars().first() 

@@ -68,7 +68,7 @@ async def get_user_emotions(
     result = await db.execute(
         select(Emotion)
         .where(Emotion.user_id == user_id)
-        .order_by(desc(Emotion.detected_at))
+        .order_by(asc(Emotion.detected_at))
         .offset(offset)
         .limit(limit)
     )
@@ -125,7 +125,7 @@ async def get_emotion_history(
     total_count = total_result.scalar()
     
     # 페이지네이션
-    query = query.order_by(desc(Emotion.detected_at)).offset(request.offset).limit(request.limit)
+    query = query.order_by(asc(Emotion.detected_at)).offset(request.offset).limit(request.limit)
     
     result = await db.execute(query)
     emotions = result.scalars().all()
@@ -189,7 +189,7 @@ async def get_recent_emotions(
                 Emotion.detected_at >= cutoff_date
             )
         )
-        .order_by(desc(Emotion.detected_at))
+        .order_by(asc(Emotion.detected_at))
         .limit(limit)
     )
     return result.scalars().all()
@@ -714,3 +714,119 @@ async def get_user_recent_emotions(
     
     result = await db.execute(query)
     return result.scalars().all() 
+
+
+async def get_emotion_statistics_for_user(
+    db: AsyncSession,
+    user_id: str,
+    days_back: int = 30
+) -> Dict[str, Any]:
+    """사용자의 감정 통계 집계"""
+    cutoff_date = datetime.utcnow() - timedelta(days=days_back)
+    
+    # 기본 감정 데이터 조회
+    emotions_query = select(Emotion).where(
+        and_(
+            Emotion.user_id == user_id,
+            Emotion.detected_at >= cutoff_date
+        )
+    )
+    
+    result = await db.execute(emotions_query)
+    emotions = result.scalars().all()
+    
+    if not emotions:
+        return {
+            "total_emotions": 0,
+            "emotion_distribution": {},
+            "avg_intensity": 0.0,
+            "dominant_emotion": "neutral",
+            "emotion_frequency": {},
+            "mood_stability": 0.5,
+            "positive_ratio": 0.5,
+            "emotional_range": 0.0,
+            "recent_emotions": []
+        }
+    
+    # 감정 분포 계산
+    emotion_counts = {}
+    emotion_intensities = {}
+    positive_emotions = ["기쁨", "행복", "만족", "편안", "희망", "감사"]
+    negative_emotions = ["우울", "슬픔", "화남", "불안", "걱정", "외로움"]
+    
+    positive_count = 0
+    negative_count = 0
+    neutral_count = 0
+    total_intensity = 0
+    
+    for emotion in emotions:
+        # 감정별 개수
+        emotion_counts[emotion.emotion] = emotion_counts.get(emotion.emotion, 0) + 1
+        
+        # 감정별 강도 합계
+        if emotion.emotion not in emotion_intensities:
+            emotion_intensities[emotion.emotion] = []
+        emotion_intensities[emotion.emotion].append(emotion.intensity)
+        
+        # 긍정/부정/중립 분류
+        if emotion.emotion in positive_emotions:
+            positive_count += 1
+        elif emotion.emotion in negative_emotions:
+            negative_count += 1
+        else:
+            neutral_count += 1
+        
+        total_intensity += emotion.intensity
+    
+    # 지배적 감정
+    dominant_emotion = max(emotion_counts.keys(), key=lambda k: emotion_counts[k]) if emotion_counts else "neutral"
+    
+    # 평균 강도
+    avg_intensity = total_intensity / len(emotions) if emotions else 0.0
+    
+    # 긍정 비율
+    total_emotions = len(emotions)
+    positive_ratio = positive_count / total_emotions if total_emotions > 0 else 0.5
+    
+    # 감정 안정성 (강도 변화의 표준편차)
+    intensities = [e.intensity for e in emotions]
+    if len(intensities) > 1:
+        import statistics
+        intensity_std = statistics.stdev(intensities)
+        mood_stability = max(0.0, 1.0 - intensity_std)  # 표준편차가 작을수록 안정적
+    else:
+        mood_stability = 0.5
+    
+    # 감정 범위 (최대 강도 - 최소 강도)
+    emotional_range = max(intensities) - min(intensities) if intensities else 0.0
+    
+    # 최근 감정 (최근 5개)
+    recent_emotions = []
+    for emotion in sorted(emotions, key=lambda x: x.detected_at, reverse=True)[:5]:
+        recent_emotions.append({
+            "emotion": emotion.emotion,
+            "intensity": emotion.intensity,
+            "detected_at": emotion.detected_at.isoformat() if emotion.detected_at else None,
+            "context": emotion.context
+        })
+    
+    # 감정별 평균 강도
+    emotion_avg_intensities = {}
+    for emotion_type, intensities_list in emotion_intensities.items():
+        emotion_avg_intensities[emotion_type] = sum(intensities_list) / len(intensities_list)
+    
+    return {
+        "total_emotions": total_emotions,
+        "emotion_distribution": emotion_counts,
+        "avg_intensity": round(avg_intensity, 2),
+        "dominant_emotion": dominant_emotion,
+        "emotion_frequency": emotion_counts,
+        "emotion_avg_intensities": emotion_avg_intensities,
+        "mood_stability": round(mood_stability, 2),
+        "positive_ratio": round(positive_ratio, 2),
+        "emotional_range": round(emotional_range, 2),
+        "recent_emotions": recent_emotions,
+        "positive_count": positive_count,
+        "negative_count": negative_count,
+        "neutral_count": neutral_count
+    } 

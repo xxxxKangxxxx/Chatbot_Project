@@ -28,7 +28,7 @@ class QdrantService:
             api_key=settings.QDRANT_API_KEY if hasattr(settings, 'QDRANT_API_KEY') else None
         )
         self.collection_name = "chat_vectors"
-        self.vector_dimension = 1536  # text-embedding-3-small 차원
+        self.vector_dimension = 768  # Gemini text-embedding-004 차원
         
     async def initialize_collection(self) -> bool:
         """

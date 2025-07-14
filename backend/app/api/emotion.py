@@ -9,6 +9,8 @@ import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_
+import uuid
 
 from app.database import get_db
 from app.schemas.emotion import (
@@ -18,9 +20,11 @@ from app.schemas.emotion import (
 from app.crud.user import get_user_by_id
 from app.crud.emotion import (
     get_user_emotions, get_emotion, get_user_recent_emotions,
-    create_emotion, update_emotion, delete_emotion
+    create_emotion, update_emotion, delete_emotion,
+    get_emotion_statistics_for_user
 )
 from app.crud.chat_log import get_user_chat_history
+from app.models.emotion import Emotion
 from app.services import (
     analyze_text_emotion, get_emotion_trend, detect_emotion_patterns
 )
@@ -93,30 +97,27 @@ async def get_emotion_trends_endpoint(
         if not user:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
         
-        # 감정 기록 조회
-        emotions = await get_user_emotions(db, user_id, 1000, 0)
+        # 실제 감정 통계 집계
+        stats = await get_emotion_statistics_for_user(db, user_id, days_back)
         
-        # 감정 데이터를 딕셔너리 형태로 변환
-        emotions_data = []
-        for emotion in emotions:
-            emotions_data.append({
-                'emotion': emotion.emotion,
-                'intensity': emotion.intensity,
-                'timestamp': emotion.timestamp
-            })
-        
-        # 트렌드 분석 실행 (임시로 기본값 반환)
-        return {
+        # 트렌드 분석 데이터 구성
+        trend_data = {
             "user_id": user_id,
             "period_start": (datetime.now() - timedelta(days=days_back)).isoformat(),
             "period_end": datetime.now().isoformat(),
-            "total_entries": len(emotions_data),
-            "avg_score": 0.5,
-            "score_trend": "stable",
-            "emotion_distribution": {},
-            "intensity_distribution": {},
+            "total_entries": stats["total_emotions"],
+            "avg_score": stats["avg_intensity"],
+            "score_trend": "stable" if stats["mood_stability"] > 0.7 else "fluctuating",
+            "emotion_distribution": stats["emotion_distribution"],
+            "intensity_distribution": stats["emotion_avg_intensities"],
+            "mood_stability": stats["mood_stability"],
+            "positive_ratio": stats["positive_ratio"],
+            "emotional_range": stats["emotional_range"],
+            "recent_emotions": stats["recent_emotions"],
             "message": "트렌드 분석 완료"
         }
+        
+        return trend_data
         
     except Exception as e:
         logger.error(f"감정 트렌드 분석 중 오류 발생: {str(e)}")
@@ -143,49 +144,55 @@ async def get_emotion_summary(
         elif isinstance(date, datetime):
             date = date.date()
         
-        # 감정 요약 조회 (임시로 항상 None으로 처리)
-        summary = None
+        # 해당 날짜의 감정 데이터 조회
+        start_datetime = datetime.combine(date, datetime.min.time())
+        end_datetime = datetime.combine(date, datetime.max.time())
         
-        if not summary:
-            # 요약이 없으면 해당 날짜의 감정 데이터로 생성
-            start_datetime = datetime.combine(date, datetime.min.time())
-            end_datetime = datetime.combine(date, datetime.max.time())
+        # 해당 날짜의 감정 기록만 조회
+        emotions_query = select(Emotion).where(
+            and_(
+                Emotion.user_id == user_id,
+                Emotion.detected_at >= start_datetime,
+                Emotion.detected_at <= end_datetime
+            )
+        )
+        
+        result = await db.execute(emotions_query)
+        emotions = result.scalars().all()
+        
+        if emotions:
+            # 감정 분포 계산
+            emotion_counts = {}
+            total_intensity = 0
             
-            emotions = await get_user_emotions(db, user_id, 1000, 0)
+            for emotion in emotions:
+                emotion_type = emotion.emotion
+                emotion_counts[emotion_type] = emotion_counts.get(emotion_type, 0) + 1
+                total_intensity += emotion.intensity
             
-            if emotions:
-                # 감정 분포 계산
-                emotion_counts = {}
-                total_intensity = 0
-                
-                for emotion in emotions:
-                    emotion_type = emotion.emotion
-                    emotion_counts[emotion_type] = emotion_counts.get(emotion_type, 0) + 1
-                    total_intensity += emotion.intensity
-                
-                # 지배적 감정과 평균 강도 계산
-                dominant_emotion = max(emotion_counts.keys(), key=lambda k: emotion_counts[k])
-                avg_intensity = total_intensity / len(emotions)
-                
-                return {
-                    "user_id": user_id,
-                    "date": date,
-                    "dominant_emotion": dominant_emotion,
-                    "avg_intensity": round(avg_intensity, 2),
-                    "emotion_distribution": emotion_counts,
-                    "total_records": len(emotions),
-                    "summary_type": "generated"
-                }
-            else:
-                return {
-                    "user_id": user_id,
-                    "date": date,
-                    "dominant_emotion": "neutral",
-                    "avg_intensity": 0.5,
-                    "emotion_distribution": {},
-                    "total_records": 0,
-                    "summary_type": "empty"
-                }
+            # 지배적 감정과 평균 강도 계산
+            dominant_emotion = max(emotion_counts.keys(), key=lambda k: emotion_counts[k])
+            avg_intensity = total_intensity / len(emotions)
+            
+            return {
+                "user_id": user_id,
+                "date": date.isoformat() if hasattr(date, 'isoformat') else str(date),
+                "dominant_emotion": dominant_emotion,
+                "avg_intensity": round(avg_intensity, 2),
+                "emotion_distribution": emotion_counts,
+                "total_records": len(emotions),
+                "summary_type": "generated"
+            }
+        else:
+            return {
+                "user_id": user_id,
+                "date": date.isoformat() if hasattr(date, 'isoformat') else str(date),
+                "dominant_emotion": "neutral",
+                "avg_intensity": 0.5,
+                "emotion_distribution": {},
+                "total_records": 0,
+                "summary_type": "empty"
+            }
         
         return EmotionSummaryResponse(
             id=summary.id,
@@ -218,24 +225,20 @@ async def get_emotion_statistics(
         if not user:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
         
-        # 감정 통계 조회 (임시로 기본값 반환)
-        from datetime import datetime
+        # 실제 감정 통계 집계
+        stats = await get_emotion_statistics_for_user(db, user_id, days_back)
         
-        return {
+        # 응답 데이터 구성
+        response_data = {
             "user_id": user_id,
             "stats_period": {
                 "start": (datetime.now() - timedelta(days=days_back)).isoformat(),
                 "end": datetime.now().isoformat()
             },
-            "total_emotions": 0,
-            "emotion_distribution": {},
-            "avg_intensity": 0.0,
-            "dominant_emotion": "neutral",
-            "emotion_frequency": {},
-            "mood_stability": 0.5,
-            "positive_ratio": 0.5,
-            "emotional_range": 0.0
+            **stats
         }
+        
+        return response_data
         
     except Exception as e:
         logger.error(f"감정 통계 조회 중 오류 발생: {str(e)}")
@@ -265,7 +268,7 @@ async def get_emotion_patterns(
             emotions_data.append({
                 'emotion': emotion.emotion,
                 'intensity': emotion.intensity,
-                'timestamp': emotion.timestamp
+                'timestamp': emotion.detected_at
             })
         
         # 패턴 분석 실행
@@ -305,19 +308,34 @@ async def analyze_text_emotion_endpoint(
         # 감정 분석 실행
         emotion_result = await analyze_text_emotion(request.text, user_id)
         
+        # 감정 분석 결과 DB 저장
+        if getattr(request, "save_to_history", True):
+            from app.models.emotion import Emotion
+            emotion_obj = Emotion(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                emotion=emotion_result.primary_emotion.value,
+                intensity=emotion_result.intensity,
+                context=request.text,
+                detected_method=emotion_result.analysis_method,
+                detected_at=emotion_result.timestamp
+            )
+            db.add(emotion_obj)
+            await db.commit()
+        
         return {
             "user_id": user_id,
             "analyzed_text": request.text,
             "analysis_result": {
                 "primary_emotion": emotion_result.primary_emotion.value,
-                "emotion_scores": emotion_result.emotion_scores,
+                "emotion_scores": emotion_result.emotion_scores if hasattr(emotion_result, 'emotion_scores') else {},
                 "intensity": emotion_result.intensity,
                 "confidence": emotion_result.confidence,
                 "detected_keywords": emotion_result.detected_keywords,
                 "analysis_method": emotion_result.analysis_method
             },
             "analysis_timestamp": emotion_result.timestamp,
-            "save_to_history": request.save_to_history
+            "save_to_history": getattr(request, "save_to_history", True)
         }
         
     except Exception as e:
@@ -389,6 +407,9 @@ async def get_daily_emotion_summary(
         if not start_date:
             start_date = end_date - timedelta(days=7)
         
+        # 전체 감정 기록 조회 (날짜 필터링 없이)
+        all_emotions = await get_user_emotions(db, user_id, 1000, 0)
+        
         # 일별 요약 생성
         daily_summaries = []
         current_date = start_date.date()
@@ -398,28 +419,31 @@ async def get_daily_emotion_summary(
             start_datetime = datetime.combine(current_date, datetime.min.time())
             end_datetime = datetime.combine(current_date, datetime.max.time())
             
-            # 해당 날짜의 감정 기록 조회
-            emotions = await get_user_emotions(db, user_id, start_datetime, end_datetime)
+            # 해당 날짜의 감정 기록 필터링
+            day_emotions = [
+                emotion for emotion in all_emotions 
+                if emotion.detected_at and start_datetime <= emotion.detected_at <= end_datetime
+            ]
             
-            if emotions:
+            if day_emotions:
                 # 감정 분포 계산
                 emotion_counts = {}
                 total_intensity = 0
                 
-                for emotion in emotions:
+                for emotion in day_emotions:
                     emotion_type = emotion.emotion
                     emotion_counts[emotion_type] = emotion_counts.get(emotion_type, 0) + 1
                     total_intensity += emotion.intensity
                 
                 dominant_emotion = max(emotion_counts.keys(), key=lambda k: emotion_counts[k])
-                avg_intensity = total_intensity / len(emotions)
+                avg_intensity = total_intensity / len(day_emotions)
                 
                 daily_summaries.append({
                     "date": current_date,
                     "dominant_emotion": dominant_emotion,
                     "avg_intensity": round(avg_intensity, 2),
                     "emotion_distribution": emotion_counts,
-                    "total_records": len(emotions)
+                    "total_records": len(day_emotions)
                 })
             else:
                 daily_summaries.append({
